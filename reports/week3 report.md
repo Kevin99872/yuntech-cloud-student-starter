@@ -126,6 +126,12 @@ W3／第五組／周于凱、張巧麗、張慧如、林宥穎／7726d01（部�
     - 實際：2026-09-28 16:19:12 UTC 兩個服務啟動；2026-09-28 16:22:47 UTC `/health` 回 HTTP `200`，版本為 `7726d01684969140b31a74396bb168c0ca868a72`。
     - 證據：下方服務狀態與 curl 摘錄，以及本機去除敏感資訊的完整紀錄。
     - 尚缺：主機 running、2/2 status checks、cloud-init 完成、nginx 與 `127.0.0.1:8080` 首次監聽的五層觀測時間未完整記錄。
+    - 第二輪重建驗證：已使用自產 ed25519 key pair 與建立時注入的 User data 驗證服務；這是第二輪主機的驗證，不代表第一輪的手動補救改成首次 User data 成功。
+        - 驗證時間：服務輸出顯示 2026-09-28 17:40:03 UTC，尚未記錄本機執行 `date` 的時間。
+        - 實際：`cloud-init status --wait` 回 `status: done`；nginx 與 inspection 均回 `active`；`curl -i http://127.0.0.1/health` 回 HTTP `200 OK`。
+        - 回應：`status=ok`、`service=inspection`、`version=7726d01684969140b31a74396bb168c0ca868a72`、`started_at=2026-09-28T17:39:24Z`。
+        - 證據：第二輪 EC2 內的 cloud-init、systemd 與 loopback curl 輸出已由本人保存。
+        - 尚待補齊：第二輪 Instance ID、根 EBS ID、ENI ID、專用 SG ID、key pair 名稱，以及停止後 `stopped` 的 Console 證據。
     - EC2 nginx inspection 服務建立成功（摘錄）：
         - 證據：
 
@@ -176,25 +182,25 @@ W3／第五組／周于凱、張巧麗、張慧如、林宥穎／7726d01（部�
         
 
 - 拒絕／故障測試：操作、預期、實際、原因、最小修正：
-    - T3(a) Security Group 阻擋 HTTP：已執行移除與恢復 TCP 80 入站規則；本次測試時間為台灣時間 CST（UTC+8）。
-        - 原始測試：2026-09-29 00:50:18 CST（UTC+8）；實際 HTTP `200`、curl exit `0`。
-            - 公開端點：`http://44.223.85.180/health`
-            - 回應：`status=ok`、`service=inspection`、`version=7726d01684969140b31a74396bb168c0ca868a72`、`started_at=2026-09-28T16:32:28Z`。
-            - 證據：回應標頭為 `HTTP/1.1 200 OK`、`Server: nginx`；完整非敏感輸出已由本人保存。
-        - 移除 TCP 80 規則：2026-09-29 00:51:06 CST（UTC+8）；實際 `curl: (28) Connection timed out after 8001 milliseconds`，curl exit `28`；因未收到 HTTP 回應，HTTP status 記為 `000`。
-            - 公開端點：`http://44.223.85.180/health`
-            - 證據：完整非敏感輸出為 timeout 訊息與 `curl_exit=28`。
-        - 恢復 TCP 80 規則：2026-09-29 00:52:28 CST（UTC+8）；實際 HTTP `200`、curl exit `0`。
-            - 公開端點：`http://44.223.85.180/health`
-            - 回應：`status=ok`、`service=inspection`、`version=7726d01684969140b31a74396bb168c0ca868a72`、`started_at=2026-09-28T16:32:28Z`。
-            - 證據：回應標頭為 `HTTP/1.1 200 OK`、`Server: nginx`；完整非敏感輸出已由本人保存。
-        - 原因與最小修正：移除 TCP 80 入站規則時，封包在 Security Group 被阻擋，未到達 nginx；將原本相同的 TCP 80／來源 `/32` 規則加回後，服務恢復 HTTP `200`。T3(a) 已完成。
-        - 尚待補齊：Security Group ID、TCP 80 的來源 `/32`，以及 Console 規則變更的畫面或紀錄。
-    - T3(b) inspection 停止／啟動：已記錄停止前基準，故障與恢復操作尚待執行。
-        - 停止前基準：2026-09-28 16:54:34 UTC；nginx 為 `active`、inspection 為 `active`；本機 `curl -i --max-time 8 http://127.0.0.1/health` 回 HTTP `200`。
-        - 停止前回應：`status=ok`、`service=inspection`、`version=7726d01684969140b31a74396bb168c0ca868a72`、`started_at=2026-09-28T16:32:28Z`。
-        - 證據：EC2 內的 `systemctl is-active` 與 loopback curl 輸出已由本人保存。
-        - 尚未執行：`sudo systemctl stop inspection`、外部 curl、`sudo systemctl start inspection` 與恢復後外部 curl；因此 T3(b) 不能填寫為通過。
+    - T3(a) Security Group 阻擋 HTTP：已完成。
+        - 預測：移除 TCP 80 入站規則後，封包應在 Security Group 被阻擋，curl timeout、HTTP status `000`；恢復相同規則後應回 HTTP `200`。
+        - 實際：原始測試 2026-09-29 00:50:18 CST（UTC+8）回 HTTP `200`、curl exit `0`；移除規則後 timeout、curl exit `28`；恢復規則後回 HTTP `200`、curl exit `0`。
+        - 原因：移除 TCP 80 入站規則時，封包未到達 nginx；加回原本相同的 TCP 80／來源 `/32` 規則後服務恢復。
+        - 最小修正：恢復原本的 TCP 80 入站規則。
+        - 證據：
+            - 原始：2026-09-29 00:50:18 CST，`http://44.223.85.180/health` 回 `HTTP/1.1 200 OK`、`curl exit=0`，JSON version 為 `7726d01684969140b31a74396bb168c0ca868a72`。
+            - 移除：2026-09-29 00:51:06 CST，`curl: (28) Connection timed out after 8001 milliseconds`、`curl exit=28`、HTTP status `000`。
+            - 恢復：2026-09-29 00:52:28 CST，回 `HTTP/1.1 200 OK`、`curl exit=0`，JSON status 為 `ok`、service 為 `inspection`。
+            - 尚待補齊：Security Group ID、TCP 80 的來源 `/32`，以及 Console 規則變更的畫面或紀錄。
+    - T3(b) inspection 停止／啟動：已完成。
+        - 預測：停止 inspection 後 nginx 應仍回應，但因無法連到 `127.0.0.1:8080` 而回 `502`；重新啟動 inspection 後應回 HTTP `200`。
+        - 實際：停止前兩個服務均 active 且 `/health` 回 `200`；停止後回 `502`、curl exit `0`；恢復後回 `200`、curl exit `0`。
+        - 原因：nginx 仍在運作並成功回應，但後端 inspection 停止；恢復 inspection 後反向代理重新可用。
+        - 最小修正：執行 `sudo systemctl start inspection`。
+        - 證據：
+            - 停止前：2026-09-28 16:54:34 UTC，nginx 與 inspection 均為 `active`，本機 `/health` 回 `200`。
+            - 停止後：2026-09-29 00:56:44 CST（UTC+8），回 `HTTP/1.1 502 Bad Gateway`、`curl exit=0`，Server 為 nginx。
+            - 恢復後：2026-09-29 00:57:41 CST（UTC+8），回 `HTTP/1.1 200 OK`、`curl exit=0`，JSON version 為 `7726d01684969140b31a74396bb168c0ca868a72`。
 - 一次請求經過哪些服務與權限檢查：
     - 筆電或 Codespace → 公有 IPv4 → 預設路由表／IGW → Security Group TCP 80 → nginx → `127.0.0.1:8080` 的 inspection → `/health` JSON。
     - 本次實際掛載兩個 Security Group，且使用筆電連線；來源 `/32` 與規則內容尚未在本報告附上，因此此段路徑仍需以 Console 證據補強。
@@ -205,12 +211,18 @@ W3／第五組／周于凱、張巧麗、張慧如、林宥穎／7726d01（部�
     - EC2：`i-005bfb8e1d915dc69`，目前部署測試主機；回收前需確認它是本次資源且記錄狀態。
     - Security Group：`sg-oa094864316485bfb`（default）、`sg-0c1a26345931ec779`（my device）。目前尚未證明符合「1 個專用 SG」範圍，禁止直接刪除 default SG。
     - 根 EBS、ENI、key pair ID：尚未補齊，需從 EC2 詳細資料核對後填入；不以名稱猜測或廣泛刪除。
-    - 回收／保留：T4 尚未完成；未取得核對過的擁有權與狀態前不執行刪除。
+    - 回收／保留：第一輪 EC2 已回收；第二輪已建立並完成服務驗證，已發出停止命令，等待狀態變為 `stopped`。
+        - EC2 `i-005bfb8e1d915dc69`：Console 截圖顯示狀態為 `Terminated`。
+        - 專用 SG `sg-0c1a26345931ec779`：Console 截圖顯示為 `my laptop`，Inbound rules 為 0；這證明規則已移除，但尚未證明 Security Group 本身已刪除。
+        - 第二輪 EC2：Console 截圖顯示已成功啟動停止流程，當下狀態為 `stopping`；key pair 欄位為 `w03-ed25519`，Security group 欄位為第二輪專用 SG。Instance ID、根 EBS ID、ENI ID 與 SG ID 尚待從 Console 詳細資料補入。
+        - 第二輪停止證據：截圖顯示 AWS 已接受 Stop 操作；需待列表刷新並顯示 `stopped` 後，才可判定 T4 保留完成。
+        - `default` SG `sg-0a094864316485bfb` 與預設 VPC 不刪除。
+        - 證據時間：2026-09-29 01:10 CST（UTC+8），時間取自截圖左下角。
 - 成本觀察與不確定性：
     - 預估約 `$11.88 USD/month`，包含 `t3.micro`、8 GiB gp3 與公有 IPv4 的假設；實際值受運作時數、磁碟大小、Learner Lab 額度與當期價格影響。
     - EC2 停止後通常不收運算費，但 EBS 與公有 IPv4 的計費狀態仍需依當期 AWS 價格確認。
 - 未測部分／阻塞／下一步：
     - T1：補齊預設 VPC／子網／實際路由表、AL2023 x86_64 AMI、來源 `/32`、入站僅 22／80、根 EBS 加密 gp3 DeleteOnTermination、IMDSv2 required 證據。
     - T2：依規格改用自產 ed25519 key pair、單一專用 SG、部署時注入 User data，並建立／審查 `deploy/up.sh`；補齊五層首次觀測與 early curl。
-    - T3：T3(a) 已完成；仍需執行 T3(b) inspection 停止／啟動，記錄預測、實際、原因、exit code、HTTP status code。
-    - T4：完成 `deploy/down.sh` 回收讀回，再從同一 commit 重建並停止保留第二台。
+    - T3：T3(a)、T3(b) 已完成；仍需確認並補上 T3(a) 的 Security Group ID、來源 `/32` 與規則變更證據。
+    - T4：第一輪 EC2 已由 Console 終止，第二輪已由同一 commit 重建並驗證 `cloud-init` 與 `/health`，且已發出 Stop；尚待狀態變為 `stopped`、補齊第二輪資源 ID，並完成 `deploy/down.sh` 的回收讀回。
