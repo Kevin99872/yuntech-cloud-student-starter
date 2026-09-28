@@ -149,8 +149,4 @@
 - 成本觀察與不確定性：
     - 預估約 `$11.88 USD/month`，包含 `t3.micro`、8 GiB gp3 與公有 IPv4 的假設；實際值受運作時數、磁碟大小、Learner Lab 額度與當期價格影響。
     - EC2 停止後通常不收運算費，但 EBS 與公有 IPv4 的計費狀態仍需依當期 AWS 價格確認。
-- 未測部分／阻塞／下一步：
-    - T1：預設 VPC 已核對（`vpc-0565cd00fae099d5b`）；仍需補齊子網 ID、實際使用的路由表、AL2023 x86_64 AMI 名稱與建立日期、來源 `/32`、入站僅 22／80、根 EBS 加密 gp3 DeleteOnTermination、IMDSv2 required 證據。
-    - T2：`deploy/up.sh`／`deploy/down.sh` 尚未建立並 commit；五層首次觀測時間與服務尚未就緒前的 early curl 完整證據尚未補齊。
-    - T3：T3(c)（小組指定一人示範停止 nginx、三種故障比較）尚未執行。
-    - T4：尚未以 `deploy/down.sh` 完成腳本化回收與讀回五項不存在（目前第一輪為手動終止／Console 核對，第一輪根 EBS、ENI、key pair ID 未補齊）；`deploy/up.sh` 腳本化重建亦尚未完成。
+
