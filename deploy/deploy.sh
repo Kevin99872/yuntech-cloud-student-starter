@@ -48,10 +48,11 @@ done
 [[ "$(stat -c '%a' "$ENV_FILE")" == "600" ]] || { printf 'Secret file must have mode 600.\n' >&2; exit 1; }
 
 COMMIT=$(git -C "$ROOT" rev-parse --verify --short=40 HEAD)
-TMP_USER_DATA=$(mktemp "$ROOT/.local/.w04-user-data.XXXXXX")
-trap 'rm -f "$TMP_USER_DATA"' EXIT
-chmod 600 "$TMP_USER_DATA"
+TMP_USER_DATA_DIR=$(mktemp -d "$ROOT/.local/.w04-user-data.XXXXXX")
+TMP_USER_DATA="$TMP_USER_DATA_DIR/user-data.sh"
+trap 'rm -rf "$TMP_USER_DATA_DIR"' EXIT
 bash "$ROOT/deploy/make-user-data.sh" HEAD "$TMP_USER_DATA" >/dev/null
+chmod 600 "$TMP_USER_DATA"
 
 printf 'Target host: %s\nCommit: %s\nSecret destination: /etc/inspection/app.env (mode 600)\n' "$HOST" "$COMMIT"
 printf 'Type DEPLOY to continue: '
@@ -64,6 +65,7 @@ SCP=(scp -i "$KEY" -o StrictHostKeyChecking=accept-new)
 "${SCP[@]}" "$TMP_USER_DATA" "ec2-user@$HOST:/tmp/w04-user-data.sh"
 "${SSH[@]}" 'sudo bash /tmp/w04-user-data.sh'
 
+"${SSH[@]}" 'sudo install -d -o root -g root -m 755 /etc/inspection'
 "${SSH[@]}" 'sudo install -o root -g root -m 600 /dev/stdin /etc/inspection/app.env' < "$ENV_FILE"
 "${SSH[@]}" 'sudo systemctl restart inspection'
 
