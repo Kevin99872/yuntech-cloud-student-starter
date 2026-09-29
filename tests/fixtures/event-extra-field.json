@@ -1,0 +1,8 @@
+{
+  "event_id": "g05-m1-0003",
+  "device_id": "g05-d01",
+  "observed_at": "2026-09-29T10:00:00+08:00",
+  "type": "anomaly",
+  "note": "unexpected field",
+  "severity": "high"
+}
