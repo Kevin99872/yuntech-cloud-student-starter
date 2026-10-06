@@ -6,6 +6,7 @@ REGION=${AWS_REGION:-us-east-1}
 HOST=""
 KEY=""
 ENV_FILE="$ROOT/.local/app.env"
+DB_ENV_FILE="$ROOT/.local/db.env"
 CONFIRM=""
 
 usage() {
@@ -45,7 +46,9 @@ done
 [[ "$CONFIRM" == "DEPLOY" ]] || { printf 'Refusing deployment: pass --confirm DEPLOY after reviewing the target.\n' >&2; exit 1; }
 [[ -f "$KEY" ]] || { printf 'Private key not found.\n' >&2; exit 1; }
 [[ -f "$ENV_FILE" ]] || { printf 'Secret file not found.\n' >&2; exit 1; }
+[[ -f "$DB_ENV_FILE" ]] || { printf 'Database secret file not found.\n' >&2; exit 1; }
 [[ "$(stat -c '%a' "$ENV_FILE")" == "600" ]] || { printf 'Secret file must have mode 600.\n' >&2; exit 1; }
+[[ "$(stat -c '%a' "$DB_ENV_FILE")" == "600" ]] || { printf 'Database secret file must have mode 600.\n' >&2; exit 1; }
 
 COMMIT=$(git -C "$ROOT" rev-parse --verify --short=40 HEAD)
 TMP_USER_DATA_DIR=$(mktemp -d "$ROOT/.local/.w04-user-data.XXXXXX")
@@ -66,7 +69,7 @@ SCP=(scp -i "$KEY" -o StrictHostKeyChecking=accept-new)
 "${SSH[@]}" 'sudo bash /tmp/w04-user-data.sh'
 
 "${SSH[@]}" 'sudo install -d -o root -g root -m 755 /etc/inspection'
-"${SSH[@]}" 'sudo install -o root -g root -m 600 /dev/stdin /etc/inspection/app.env' < "$ENV_FILE"
+cat "$ENV_FILE" "$DB_ENV_FILE" | "${SSH[@]}" 'sudo install -o root -g root -m 600 /dev/stdin /etc/inspection/app.env'
 "${SSH[@]}" 'sudo systemctl restart inspection'
 
 HEALTH=$(curl -fsS --max-time 8 "http://$HOST/health")

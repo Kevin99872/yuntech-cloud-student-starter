@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""In-memory W4 inspection event service."""
+"""Inspection event service with optional PostgreSQL persistence."""
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -7,6 +7,11 @@ import os
 from pathlib import Path
 import re
 from urllib.parse import unquote
+
+try:
+    import psycopg
+except ImportError:
+    psycopg = None
 
 
 EVENT_FIELDS = {"event_id", "device_id", "observed_at", "type", "note"}
@@ -16,6 +21,43 @@ EVENT_TYPES = {"status", "anomaly", "test"}
 
 def load_tokens():
     return os.environ.get("REPORTER_TOKEN", ""), os.environ.get("OPERATOR_TOKEN", "")
+
+
+def database_configured():
+    return all(os.environ.get(name) for name in ("DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"))
+
+
+def database_connection():
+    if psycopg is None:
+        raise RuntimeError("database driver unavailable")
+    return psycopg.connect(
+        host=os.environ["DB_HOST"], port=os.environ["DB_PORT"],
+        dbname=os.environ["DB_NAME"], user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"], sslmode="verify-full",
+        sslrootcert="/etc/inspection/rds-ca.pem", connect_timeout=5,
+    )
+
+
+def ensure_schema(connection):
+    with connection.cursor() as cursor:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL,
+                observed_at TEXT NOT NULL, type TEXT NOT NULL, note TEXT,
+                received_at TEXT NOT NULL
+            )
+        """)
+    connection.commit()
+
+
+def row_to_event(row):
+    event_id, device_id, observed_at, event_type, note, received_at = row
+    result = {"event_id": event_id, "device_id": device_id,
+              "observed_at": observed_at, "type": event_type,
+              "received_at": received_at}
+    if note is not None:
+        result["note"] = note
+    return result
 
 
 def validate_event(event):
@@ -95,20 +137,44 @@ def make_server(version_file, port=8080):
             if self.path == "/health":
                 reporter, operator = load_tokens()
                 self.send_json(200, {"status": "ok", "service": "inspection", "version": version,
-                                     "started_at": started, "auth_configured": bool(reporter and operator)})
+                                     "started_at": started, "auth_configured": bool(reporter and operator),
+                                     "db_configured": database_configured()})
                 return
             if self.path == "/":
                 self.send_page()
                 return
             if self.path == "/events":
                 if self.require_role("operator"):
-                    self.send_json(200, {"events": list(events.values())[-50:]})
+                    if not database_configured():
+                        self.send_json(200, {"events": list(events.values())[-50:]})
+                        return
+                    try:
+                        with database_connection() as connection:
+                            ensure_schema(connection)
+                            with connection.cursor() as cursor:
+                                cursor.execute("SELECT event_id, device_id, observed_at, type, note, received_at FROM events ORDER BY received_at LIMIT 50")
+                                result = [row_to_event(row) for row in cursor.fetchall()]
+                        self.send_json(200, {"events": result})
+                    except Exception:
+                        self.send_json(503, {"error": "database_unavailable"})
                 return
             prefix = "/events/"
             if self.path.startswith(prefix):
                 if self.require_role("operator"):
                     event_id = unquote(self.path[len(prefix):])
-                    event = events.get(event_id)
+                    if not database_configured():
+                        event = events.get(event_id)
+                    else:
+                        try:
+                            with database_connection() as connection:
+                                ensure_schema(connection)
+                                with connection.cursor() as cursor:
+                                    cursor.execute("SELECT event_id, device_id, observed_at, type, note, received_at FROM events WHERE event_id = %s", (event_id,))
+                                    row = cursor.fetchone()
+                            event = None if row is None else row_to_event(row)
+                        except Exception:
+                            self.send_json(503, {"error": "database_unavailable"})
+                            return
                     if event is None:
                         self.send_json(404, {"error": "not_found"})
                     else:
@@ -141,13 +207,46 @@ def make_server(version_file, port=8080):
                 self.send_json(400, {"error": reason, "field": field})
                 return
             event_id = event["event_id"]
-            if event_id in events:
-                self.send_json(409, {"error": "duplicate", "field": "event_id"})
-                return
             stored = dict(event)
             stored["received_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-            events[event_id] = stored
-            self.send_json(201, stored)
+            if not database_configured():
+                if event_id in events:
+                    self.send_json(409, {"error": "duplicate", "field": "event_id"})
+                    return
+                events[event_id] = stored
+                self.send_json(201, stored)
+                return
+            try:
+                with database_connection() as connection:
+                    ensure_schema(connection)
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            "INSERT INTO events (event_id, device_id, observed_at, type, note, received_at) VALUES (%s, %s, %s, %s, %s, %s)",
+                            (event_id, event["device_id"], event["observed_at"],
+                             event["type"], event.get("note"), stored["received_at"]),
+                        )
+                    connection.commit()
+                self.send_json(201, stored)
+            except Exception as error:
+                if psycopg is None or not isinstance(error, psycopg.errors.UniqueViolation):
+                    self.send_json(503, {"error": "database_unavailable"})
+                    return
+                try:
+                    with database_connection() as connection:
+                        with connection.cursor() as cursor:
+                            cursor.execute(
+                                "SELECT event_id, device_id, observed_at, type, note, received_at FROM events WHERE event_id = %s",
+                                (event_id,),
+                            )
+                            row = cursor.fetchone()
+                    existing = None if row is None else row_to_event(row)
+                except Exception:
+                    self.send_json(503, {"error": "database_unavailable"})
+                    return
+                if existing and all(existing.get(field) == event.get(field) for field in EVENT_FIELDS):
+                    self.send_json(200, existing)
+                else:
+                    self.send_json(409, {"error": "duplicate", "field": "event_id"})
 
         def send_page(self):
             page = """<!doctype html><meta charset=\"utf-8\"><title>Inspection events</title>
